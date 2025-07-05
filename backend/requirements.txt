@@ -1,0 +1,5 @@
+# Flask backend requirements
+flask
+flask-cors
+pymongo
+python-dotenv
