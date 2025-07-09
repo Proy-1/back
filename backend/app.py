@@ -1,16 +1,18 @@
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 from pymongo import MongoClient
 import os
 from dotenv import load_dotenv
 from bson.objectid import ObjectId
 from werkzeug.utils import secure_filename
+from werkzeug.security import generate_password_hash, check_password_hash
 
 # Load environment variables from .env file
 load_dotenv()
 
 app = Flask(__name__)
-CORS(app)
+# Configure CORS more explicitly
+CORS(app, origins=["http://localhost:3000", "http://localhost:8080", "http://127.0.0.1:3000", "http://127.0.0.1:8080"])
 
 # MongoDB connection
 MONGO_URI = os.getenv('MONGO_URI', 'mongodb://localhost:27017/pitipaw')
@@ -27,9 +29,18 @@ if not os.path.exists(UPLOAD_FOLDER):
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
+@app.route('/static/uploads/<filename>')
+def uploaded_file(filename):
+    return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
+
 @app.route('/api/health')
 def health_check():
-    return jsonify({'status': 'ok', 'message': 'Backend is running'})
+    try:
+        # Test database connection
+        db.products.count_documents({})
+        return jsonify({'status': 'ok', 'message': 'Backend is running', 'database': 'connected'})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': 'Database connection failed', 'error': str(e)}), 500
 
 # CREATE: Tambah produk baru
 def parse_product(product):
@@ -58,15 +69,27 @@ def upload_image():
 
 @app.route('/api/products', methods=['POST'])
 def create_product():
-    data = request.json
-    result = db.products.insert_one({
-        "name": data.get("name"),
-        "price": data.get("price"),
-        "description": data.get("description"),
-        "image_url": data.get("image_url")
-    })
-    new_product = db.products.find_one({"_id": result.inserted_id})
-    return jsonify(parse_product(new_product)), 201
+    try:
+        data = request.json
+        print(f"Creating product with data: {data}")  # Debug log
+        
+        if not data:
+            return jsonify({"error": "Data tidak boleh kosong"}), 400
+            
+        result = db.products.insert_one({
+            "name": data.get("name"),
+            "price": data.get("price"),
+            "description": data.get("description"),
+            "image_url": data.get("image_url")
+        })
+        
+        new_product = db.products.find_one({"_id": result.inserted_id})
+        print(f"Product created successfully: {new_product}")  # Debug log
+        return jsonify(parse_product(new_product)), 201
+        
+    except Exception as e:
+        print(f"Error creating product: {str(e)}")  # Debug log
+        return jsonify({"error": f"Error creating product: {str(e)}"}), 500
 
 # READ: Ambil semua produk
 @app.route('/api/products', methods=['GET'])
@@ -85,29 +108,75 @@ def get_product(product_id):
 # UPDATE: Ubah data produk
 @app.route('/api/products/<product_id>', methods=['PUT'])
 def update_product(product_id):
-    data = request.json
-    update_data = {
-        "name": data.get("name"),
-        "price": data.get("price"),
-        "description": data.get("description"),
-        "image_url": data.get("image_url")
-    }
-    result = db.products.update_one(
-        {"_id": ObjectId(product_id)},
-        {"$set": update_data}
-    )
-    if result.matched_count == 0:
-        return jsonify({"error": "Produk tidak ditemukan"}), 404
-    product = db.products.find_one({"_id": ObjectId(product_id)})
-    return jsonify(parse_product(product))
+    try:
+        data = request.json
+        if not data:
+            return jsonify({"error": "Data tidak boleh kosong"}), 400
+            
+        update_data = {}
+        if data.get("name") is not None:
+            update_data["name"] = data.get("name")
+        if data.get("price") is not None:
+            update_data["price"] = data.get("price")
+        if data.get("description") is not None:
+            update_data["description"] = data.get("description")
+        if data.get("image_url") is not None:
+            update_data["image_url"] = data.get("image_url")
+            
+        if not update_data:
+            return jsonify({"error": "Tidak ada data untuk diupdate"}), 400
+            
+        result = db.products.update_one(
+            {"_id": ObjectId(product_id)},
+            {"$set": update_data}
+        )
+        
+        if result.matched_count == 0:
+            return jsonify({"error": "Produk tidak ditemukan"}), 404
+            
+        product = db.products.find_one({"_id": ObjectId(product_id)})
+        return jsonify(parse_product(product))
+        
+    except Exception as e:
+        return jsonify({"error": f"Error updating product: {str(e)}"}), 500
 
 # DELETE: Hapus produk
 @app.route('/api/products/<product_id>', methods=['DELETE'])
 def delete_product(product_id):
-    result = db.products.delete_one({"_id": ObjectId(product_id)})
-    if result.deleted_count == 0:
-        return jsonify({"error": "Produk tidak ditemukan"}), 404
-    return jsonify({"message": "Produk berhasil dihapus"})
+    try:
+        result = db.products.delete_one({"_id": ObjectId(product_id)})
+        if result.deleted_count == 0:
+            return jsonify({"error": "Produk tidak ditemukan"}), 404
+        return jsonify({"message": "Produk berhasil dihapus"})
+    except Exception as e:
+        return jsonify({"error": f"Error deleting product: {str(e)}"}), 500
+
+@app.route('/api/register', methods=['POST'])
+def register_admin():
+    data = request.json
+    username = data.get('username')
+    password = data.get('password')
+    if db.admins.find_one({'username': username}):
+        return jsonify({'error': 'Username sudah ada'}), 400
+    hashed_pw = generate_password_hash(password)
+    db.admins.insert_one({'username': username, 'password': hashed_pw})
+    return jsonify({'message': 'Admin registered'}), 201
+
+@app.route('/api/login', methods=['POST'])
+def login_admin():
+    data = request.json
+    username = data.get('username')
+    password = data.get('password')
+    admin = db.admins.find_one({'username': username})
+    if not admin or not check_password_hash(admin['password'], password):
+        return jsonify({'error': 'Username/password salah'}), 401
+    # Bisa tambahkan token di sini jika mau
+    return jsonify({'message': 'Login berhasil'}), 200
+
+# Serve static files
+@app.route('/static/uploads/<path:filename>')
+def serve_static(filename):
+    return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
 
 if __name__ == '__main__':
     app.run(debug=True)
