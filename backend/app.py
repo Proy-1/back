@@ -29,10 +29,6 @@ if not os.path.exists(UPLOAD_FOLDER):
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
-@app.route('/static/uploads/<filename>')
-def uploaded_file(filename):
-    return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
-
 @app.route('/api/health')
 def health_check():
     try:
@@ -71,39 +67,46 @@ def upload_image():
 def create_product():
     try:
         data = request.json
-        print(f"Creating product with data: {data}")  # Debug log
         
         if not data:
             return jsonify({"error": "Data tidak boleh kosong"}), 400
             
+        # Validate required fields
+        if not data.get("name") or not data.get("price"):
+            return jsonify({"error": "Nama dan harga produk wajib diisi"}), 400
+            
         result = db.products.insert_one({
             "name": data.get("name"),
             "price": data.get("price"),
-            "description": data.get("description"),
-            "image_url": data.get("image_url")
+            "description": data.get("description", ""),
+            "image_url": data.get("image_url", "")
         })
         
         new_product = db.products.find_one({"_id": result.inserted_id})
-        print(f"Product created successfully: {new_product}")  # Debug log
         return jsonify(parse_product(new_product)), 201
         
     except Exception as e:
-        print(f"Error creating product: {str(e)}")  # Debug log
         return jsonify({"error": f"Error creating product: {str(e)}"}), 500
 
 # READ: Ambil semua produk
 @app.route('/api/products', methods=['GET'])
 def get_products():
-    products = db.products.find()
-    return jsonify([parse_product(p) for p in products])
+    try:
+        products = db.products.find()
+        return jsonify([parse_product(p) for p in products])
+    except Exception as e:
+        return jsonify({"error": f"Error fetching products: {str(e)}"}), 500
 
 # READ: Ambil satu produk berdasarkan id
 @app.route('/api/products/<product_id>', methods=['GET'])
 def get_product(product_id):
-    product = db.products.find_one({"_id": ObjectId(product_id)})
-    if not product:
-        return jsonify({"error": "Produk tidak ditemukan"}), 404
-    return jsonify(parse_product(product))
+    try:
+        product = db.products.find_one({"_id": ObjectId(product_id)})
+        if not product:
+            return jsonify({"error": "Produk tidak ditemukan"}), 404
+        return jsonify(parse_product(product))
+    except Exception as e:
+        return jsonify({"error": f"Error fetching product: {str(e)}"}), 500
 
 # UPDATE: Ubah data produk
 @app.route('/api/products/<product_id>', methods=['PUT'])
@@ -153,30 +156,65 @@ def delete_product(product_id):
 
 @app.route('/api/register', methods=['POST'])
 def register_admin():
-    data = request.json
-    username = data.get('username')
-    password = data.get('password')
-    if db.admins.find_one({'username': username}):
-        return jsonify({'error': 'Username sudah ada'}), 400
-    hashed_pw = generate_password_hash(password)
-    db.admins.insert_one({'username': username, 'password': hashed_pw})
-    return jsonify({'message': 'Admin registered'}), 201
+    try:
+        data = request.json
+        if not data or not data.get('username') or not data.get('password'):
+            return jsonify({'error': 'Username dan password wajib diisi'}), 400
+            
+        username = data.get('username')
+        password = data.get('password')
+        
+        if db.admins.find_one({'username': username}):
+            return jsonify({'error': 'Username sudah ada'}), 400
+            
+        hashed_pw = generate_password_hash(password)
+        db.admins.insert_one({'username': username, 'password': hashed_pw})
+        return jsonify({'message': 'Admin registered'}), 201
+        
+    except Exception as e:
+        return jsonify({'error': f'Registration error: {str(e)}'}), 500
 
 @app.route('/api/login', methods=['POST'])
 def login_admin():
-    data = request.json
-    username = data.get('username')
-    password = data.get('password')
-    admin = db.admins.find_one({'username': username})
-    if not admin or not check_password_hash(admin['password'], password):
-        return jsonify({'error': 'Username/password salah'}), 401
-    # Bisa tambahkan token di sini jika mau
-    return jsonify({'message': 'Login berhasil'}), 200
+    try:
+        data = request.json
+        if not data or not data.get('username') or not data.get('password'):
+            return jsonify({'error': 'Username dan password wajib diisi'}), 400
+            
+        username = data.get('username')
+        password = data.get('password')
+        admin = db.admins.find_one({'username': username})
+        
+        if not admin or not check_password_hash(admin['password'], password):
+            return jsonify({'error': 'Username/password salah'}), 401
+            
+        return jsonify({'message': 'Login berhasil', 'admin': {'username': username}}), 200
+        
+    except Exception as e:
+        return jsonify({'error': f'Login error: {str(e)}'}), 500
 
 # Serve static files
 @app.route('/static/uploads/<path:filename>')
 def serve_static(filename):
     return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
 
+# Endpoint untuk mendapatkan statistik (opsional)
+@app.route('/api/stats')
+def get_stats():
+    try:
+        total_products = db.products.count_documents({})
+        total_admins = db.admins.count_documents({})
+        return jsonify({
+            'total_products': total_products,
+            'total_admins': total_admins,
+            'status': 'ok'
+        })
+    except Exception as e:
+        return jsonify({'error': f'Stats error: {str(e)}'}), 500
+
 if __name__ == '__main__':
-    app.run(debug=True)
+    print("🚀 Flask Backend Starting...")
+    print(f"📊 Database: {MONGO_URI}")
+    print(f"📁 Upload folder: {UPLOAD_FOLDER}")
+    print("🌐 CORS enabled for frontend")
+    app.run(debug=True, host='0.0.0.0', port=5000)
