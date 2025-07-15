@@ -11,6 +11,9 @@ from werkzeug.security import generate_password_hash, check_password_hash
 load_dotenv()
 
 app = Flask(__name__)
+# Configure file upload size limit (10MB)
+app.config['MAX_CONTENT_LENGTH'] = 10 * 1024 * 1024  # 10MB
+
 # Configure CORS more explicitly for all routes including static files
 # Port 3000: repo front, Port 8000: repo dashboard, Port 5000: repo back (this backend)
 CORS(app, origins=["http://localhost:3000", "http://localhost:8000", "http://127.0.0.1:3000", "http://127.0.0.1:8000"], 
@@ -26,6 +29,7 @@ db = client.get_default_database()
 
 UPLOAD_FOLDER = 'static/uploads'
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif'}
+MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB in bytes
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 
 if not os.path.exists(UPLOAD_FOLDER):
@@ -42,6 +46,11 @@ def parse_product(product):
         "description": product.get("description"),
         "image_url": product.get("image_url"),
     }
+
+# Error handler for file too large
+@app.errorhandler(413)
+def request_entity_too_large(error):
+    return jsonify({'error': 'File terlalu besar. Maksimal 10MB'}), 413
 
 # HEALTH CHECK
 @app.route('/api/health')
@@ -61,12 +70,21 @@ def upload_image():
     file = request.files['image']
     if file.filename == '':
         return jsonify({'error': 'No selected file'}), 400
+    
+    # Check file size manually (additional validation)
+    file.seek(0, os.SEEK_END)
+    file_size = file.tell()
+    file.seek(0)  # Reset file pointer
+    
+    if file_size > MAX_FILE_SIZE:
+        return jsonify({'error': f'File terlalu besar. Maksimal 10MB (ukuran file: {file_size / (1024*1024):.1f}MB)'}), 400
+    
     if file and allowed_file(file.filename):
         filename = secure_filename(file.filename)
         filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         file.save(filepath)
         url = f'/static/uploads/{filename}'
-        return jsonify({'image_url': url}), 201
+        return jsonify({'image_url': url, 'file_size': f'{file_size / (1024*1024):.1f}MB'}), 201
     return jsonify({'error': 'File not allowed'}), 400
 
 # Serve static files with CORS headers
