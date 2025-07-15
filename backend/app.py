@@ -11,8 +11,13 @@ from werkzeug.security import generate_password_hash, check_password_hash
 load_dotenv()
 
 app = Flask(__name__)
-# Configure CORS more explicitly
-CORS(app, origins=["http://localhost:3000", "http://localhost:8080", "http://127.0.0.1:3000", "http://127.0.0.1:8080"])
+# Configure CORS more explicitly for all routes including static files
+# Port 3000: repo front, Port 8000: repo dashboard, Port 5000: repo back (this backend)
+CORS(app, origins=["http://localhost:3000", "http://localhost:8000", "http://127.0.0.1:3000", "http://127.0.0.1:8000"], 
+     resources={
+         r"/api/*": {"origins": ["http://localhost:3000", "http://localhost:8000", "http://127.0.0.1:3000", "http://127.0.0.1:8000"]},
+         r"/static/*": {"origins": ["http://localhost:3000", "http://localhost:8000", "http://127.0.0.1:3000", "http://127.0.0.1:8000"]}
+     })
 
 # MongoDB connection
 MONGO_URI = os.getenv('MONGO_URI', 'mongodb://localhost:27017/pitipaw')
@@ -64,10 +69,15 @@ def upload_image():
         return jsonify({'image_url': url}), 201
     return jsonify({'error': 'File not allowed'}), 400
 
-# Serve static files
+# Serve static files with CORS headers
 @app.route('/static/uploads/<path:filename>')
 def serve_static(filename):
-    return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
+    response = send_from_directory(app.config['UPLOAD_FOLDER'], filename)
+    # Add CORS headers manually for static files
+    response.headers['Access-Control-Allow-Origin'] = '*'
+    response.headers['Access-Control-Allow-Methods'] = 'GET'
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type'
+    return response
 
 # PRODUCT CRUD ENDPOINTS
 
