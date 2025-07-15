@@ -29,16 +29,6 @@ if not os.path.exists(UPLOAD_FOLDER):
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
-@app.route('/api/health')
-def health_check():
-    try:
-        # Test database connection
-        db.products.count_documents({})
-        return jsonify({'status': 'ok', 'message': 'Backend is running', 'database': 'connected'})
-    except Exception as e:
-        return jsonify({'status': 'error', 'message': 'Database connection failed', 'error': str(e)}), 500
-
-# CREATE: Tambah produk baru
 def parse_product(product):
     return {
         "_id": str(product.get("_id")),
@@ -48,6 +38,17 @@ def parse_product(product):
         "image_url": product.get("image_url"),
     }
 
+# HEALTH CHECK
+@app.route('/api/health')
+def health_check():
+    try:
+        # Test database connection
+        db.products.count_documents({})
+        return jsonify({'status': 'ok', 'message': 'Backend is running', 'database': 'connected'})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': 'Database connection failed', 'error': str(e)}), 500
+
+# UPLOAD ENDPOINTS
 @app.route('/api/upload', methods=['POST'])
 def upload_image():
     if 'image' not in request.files:
@@ -63,6 +64,14 @@ def upload_image():
         return jsonify({'image_url': url}), 201
     return jsonify({'error': 'File not allowed'}), 400
 
+# Serve static files
+@app.route('/static/uploads/<path:filename>')
+def serve_static(filename):
+    return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
+
+# PRODUCT CRUD ENDPOINTS
+
+# CREATE: Tambah produk baru
 @app.route('/api/products', methods=['POST'])
 def create_product():
     try:
@@ -154,8 +163,26 @@ def delete_product(product_id):
     except Exception as e:
         return jsonify({"error": f"Error deleting product: {str(e)}"}), 500
 
-@app.route('/api/register', methods=['POST'])
-def register_admin():
+# ADMIN MANAGEMENT ENDPOINTS
+
+# GET: Ambil semua admin
+@app.route('/api/admins', methods=['GET'])
+def get_admins():
+    try:
+        admins = db.admins.find({}, {'password': 0})  # Exclude password field
+        admin_list = []
+        for admin in admins:
+            admin_list.append({
+                '_id': str(admin['_id']),
+                'username': admin['username']
+            })
+        return jsonify(admin_list)
+    except Exception as e:
+        return jsonify({'error': f'Error fetching admins: {str(e)}'}), 500
+
+# CREATE: Tambah admin baru
+@app.route('/api/admins', methods=['POST'])
+def create_admin():
     try:
         data = request.json
         if not data or not data.get('username') or not data.get('password'):
@@ -168,12 +195,41 @@ def register_admin():
             return jsonify({'error': 'Username sudah ada'}), 400
             
         hashed_pw = generate_password_hash(password)
-        db.admins.insert_one({'username': username, 'password': hashed_pw})
-        return jsonify({'message': 'Admin registered'}), 201
+        result = db.admins.insert_one({'username': username, 'password': hashed_pw})
+        
+        return jsonify({
+            '_id': str(result.inserted_id),
+            'username': username,
+            'message': 'Admin created successfully'
+        }), 201
         
     except Exception as e:
-        return jsonify({'error': f'Registration error: {str(e)}'}), 500
+        return jsonify({'error': f'Error creating admin: {str(e)}'}), 500
 
+# DELETE: Hapus admin
+@app.route('/api/admins/<admin_id>', methods=['DELETE'])
+def delete_admin(admin_id):
+    try:
+        result = db.admins.delete_one({"_id": ObjectId(admin_id)})
+        if result.deleted_count == 0:
+            return jsonify({"error": "Admin tidak ditemukan"}), 404
+        return jsonify({"message": "Admin berhasil dihapus"})
+    except Exception as e:
+        return jsonify({"error": f"Error deleting admin: {str(e)}"}), 500
+
+# AUTHENTICATION ENDPOINTS
+
+# Register admin (alias untuk create admin)
+@app.route('/api/register', methods=['POST'])
+def register_admin():
+    return create_admin()
+
+# GET: Info login endpoint
+@app.route('/api/login', methods=['GET'])
+def login_info():
+    return jsonify({'message': 'Login endpoint ready', 'methods': ['POST']})
+
+# POST: Login admin
 @app.route('/api/login', methods=['POST'])
 def login_admin():
     try:
@@ -193,12 +249,7 @@ def login_admin():
     except Exception as e:
         return jsonify({'error': f'Login error: {str(e)}'}), 500
 
-# Serve static files
-@app.route('/static/uploads/<path:filename>')
-def serve_static(filename):
-    return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
-
-# Endpoint untuk mendapatkan statistik (opsional)
+# STATISTICS ENDPOINT
 @app.route('/api/stats')
 def get_stats():
     try:
@@ -217,4 +268,19 @@ if __name__ == '__main__':
     print(f"📊 Database: {MONGO_URI}")
     print(f"📁 Upload folder: {UPLOAD_FOLDER}")
     print("🌐 CORS enabled for frontend")
+    print("📋 Available endpoints:")
+    print("   GET  /api/health")
+    print("   GET  /api/products")
+    print("   POST /api/products")
+    print("   GET  /api/products/<id>")
+    print("   PUT  /api/products/<id>")
+    print("   DELETE /api/products/<id>")
+    print("   GET  /api/admins")
+    print("   POST /api/admins")
+    print("   DELETE /api/admins/<id>")
+    print("   GET  /api/login")
+    print("   POST /api/login")
+    print("   POST /api/register")
+    print("   POST /api/upload")
+    print("   GET  /api/stats")
     app.run(debug=True, host='0.0.0.0', port=5000)
