@@ -128,6 +128,26 @@ func main() {
 		api.GET("/stats", getStats)
 	}
 
+	// Handler static dashboard (semua selain /api dan /static)
+	dashboardPath := "../dashboard"
+	r.NoRoute(func(c *gin.Context) {
+		if strings.HasPrefix(c.Request.URL.Path, "/api") || strings.HasPrefix(c.Request.URL.Path, "/static") {
+			c.Status(http.StatusNotFound)
+			return
+		}
+		file := c.Request.URL.Path
+		if file == "/" || file == "" {
+			file = "/index.html"
+		}
+		fullPath := dashboardPath + file
+		if _, err := os.Stat(fullPath); os.IsNotExist(err) {
+			// Fallback ke index.html jika file tidak ada (SPA mode)
+			c.File(dashboardPath + "/index.html")
+			return
+		}
+		c.File(fullPath)
+	})
+
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "5000"
