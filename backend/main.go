@@ -88,11 +88,15 @@ func main() {
 	config.AllowOrigins = []string{
 		"http://localhost:3000",
 		"http://localhost:8000",
+		"http://localhost:8080",
 		"http://127.0.0.1:3000",
 		"http://127.0.0.1:8000",
+		"http://127.0.0.1:8080",
+		"*", // Allow all origins for development
 	}
 	config.AllowMethods = []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"}
-	config.AllowHeaders = []string{"Content-Type", "Authorization"}
+	config.AllowHeaders = []string{"Content-Type", "Authorization", "Accept", "Origin", "Cache-Control"}
+	config.AllowCredentials = true
 	r.Use(cors.New(config))
 
 	// Static files with CORS
@@ -128,50 +132,36 @@ func main() {
 		api.GET("/stats", getStats)
 	}
 
-	// Handler static dashboard (semua selain /api dan /static)
-	dashboardPath := "../dashboard"
-	r.NoRoute(func(c *gin.Context) {
-		if strings.HasPrefix(c.Request.URL.Path, "/api") || strings.HasPrefix(c.Request.URL.Path, "/static") {
-			c.Status(http.StatusNotFound)
-			return
-		}
-		file := c.Request.URL.Path
-		if file == "/" || file == "" {
-			file = "/index.html"
-		}
-		fullPath := dashboardPath + file
-		if _, err := os.Stat(fullPath); os.IsNotExist(err) {
-			// Fallback ke index.html jika file tidak ada (SPA mode)
-			c.File(dashboardPath + "/index.html")
-			return
-		}
-		c.File(fullPath)
-	})
-
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "5000"
 	}
 
 	fmt.Println("🚀 Go Backend Starting...")
+	fmt.Printf("🌐 Server will run on: http://localhost:%s\n", port)
 	fmt.Printf("📊 Database: %s\n", os.Getenv("MONGO_URI"))
 	fmt.Printf("📁 Upload folder: %s\n", UploadDir)
-	fmt.Println("🌐 CORS enabled for frontend")
+	fmt.Println("🔐 CORS enabled for frontend")
 	fmt.Println("📋 Available endpoints:")
-	fmt.Println("   GET  /api/health")
-	fmt.Println("   GET  /api/products")
-	fmt.Println("   POST /api/products")
-	fmt.Println("   GET  /api/products/<id>")
-	fmt.Println("   PUT  /api/products/<id>")
-	fmt.Println("   DELETE /api/products/<id>")
-	fmt.Println("   GET  /api/admins")
-	fmt.Println("   POST /api/admins")
-	fmt.Println("   DELETE /api/admins/<id>")
-	fmt.Println("   GET  /api/login")
-	fmt.Println("   POST /api/login")
-	fmt.Println("   POST /api/register")
-	fmt.Println("   POST /api/upload")
-	fmt.Println("   GET  /api/stats")
+	fmt.Println("   GET    /api/health              - Health check")
+	fmt.Println("   GET    /api/products            - Get all products")
+	fmt.Println("   POST   /api/products            - Create new product")
+	fmt.Println("   GET    /api/products/<id>       - Get product by ID")
+	fmt.Println("   PUT    /api/products/<id>       - Update product")
+	fmt.Println("   DELETE /api/products/<id>       - Delete product")
+	fmt.Println("   GET    /api/admins              - Get all admins")
+	fmt.Println("   POST   /api/admins              - Create new admin")
+	fmt.Println("   DELETE /api/admins/<id>         - Delete admin")
+	fmt.Println("   GET    /api/login               - Login info")
+	fmt.Println("   POST   /api/login               - Login admin")
+	fmt.Println("   POST   /api/register            - Register new admin")
+	fmt.Println("   POST   /api/upload              - Upload image")
+	fmt.Println("   GET    /api/stats               - Get statistics")
+	fmt.Println("   GET    /static/uploads/<file>   - Serve uploaded files")
+	fmt.Println("")
+	fmt.Println("💡 Dashboard should connect to: http://localhost:" + port)
+	fmt.Println("💡 Test health check: http://localhost:" + port + "/api/health")
+	fmt.Println("")
 
 	log.Fatal(r.Run(":" + port))
 }
@@ -180,6 +170,7 @@ func initMongoDB() {
 	mongoURI := os.Getenv("MONGO_URI")
 	if mongoURI == "" {
 		mongoURI = "mongodb://localhost:27017/pitipaw"
+		log.Println("⚠️  Using default MongoDB URI:", mongoURI)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -187,17 +178,23 @@ func initMongoDB() {
 
 	client, err := mongo.Connect(ctx, options.Client().ApplyURI(mongoURI))
 	if err != nil {
-		log.Fatal("Failed to connect to MongoDB:", err)
+		log.Printf("❌ Failed to connect to MongoDB: %v", err)
+		log.Println("💡 Make sure MongoDB is running and accessible")
+		log.Println("💡 You can start MongoDB with: mongod --dbpath /path/to/your/db")
+		log.Fatal("Exiting due to MongoDB connection failure")
 	}
 
 	// Test connection
 	err = client.Ping(ctx, nil)
 	if err != nil {
-		log.Fatal("Failed to ping MongoDB:", err)
+		log.Printf("❌ Failed to ping MongoDB: %v", err)
+		log.Println("💡 MongoDB is not responding. Please check if MongoDB service is running")
+		log.Fatal("Exiting due to MongoDB ping failure")
 	}
 
 	db = client.Database("pitipaw")
-	log.Println("✅ Connected to MongoDB")
+	log.Println("✅ Connected to MongoDB successfully")
+	log.Printf("📊 Database: %s", mongoURI)
 }
 
 // Health Check
@@ -206,7 +203,7 @@ func healthCheck(c *gin.Context) {
 	defer cancel()
 
 	// Test database connection
-	err := db.RunCommand(ctx, bson.D{{"ping", 1}}).Err()
+	err := db.RunCommand(ctx, bson.D{primitive.E{Key: "ping", Value: 1}}).Err()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"status":  "error",
@@ -217,9 +214,11 @@ func healthCheck(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"status":   "ok",
-		"message":  "Backend is running",
-		"database": "connected",
+		"status":    "ok",
+		"message":   "Backend is running",
+		"database":  "connected",
+		"version":   "1.0.0",
+		"timestamp": time.Now().Format(time.RFC3339),
 	})
 }
 
@@ -498,7 +497,11 @@ func loginAdmin(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"message": "Login berhasil",
-		"admin":   gin.H{"username": admin.Username},
+		"success": true,
+		"admin": gin.H{
+			"_id":      admin.ID.Hex(),
+			"username": admin.Username,
+		},
 	})
 }
 
@@ -506,7 +509,7 @@ func uploadImage(c *gin.Context) {
 	// Check if file exists
 	file, err := c.FormFile("image")
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "No file part"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "No file uploaded. Please select an image file."})
 		return
 	}
 
@@ -522,25 +525,34 @@ func uploadImage(c *gin.Context) {
 	filename := file.Filename
 	parts := strings.Split(filename, ".")
 	if len(parts) < 2 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "File not allowed"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "File format not supported. Please use JPG, PNG, or GIF."})
 		return
 	}
 
 	ext := strings.ToLower(parts[len(parts)-1])
 	if !allowedExtensions[ext] {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "File not allowed"})
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": fmt.Sprintf("File format not supported. Allowed formats: %v", []string{"jpg", "jpeg", "png", "gif"}),
+		})
 		return
 	}
 
+	// Generate unique filename to prevent conflicts
+	uniqueFilename := fmt.Sprintf("%d_%s", time.Now().Unix(), filename)
+	filepath := fmt.Sprintf("%s/%s", UploadDir, uniqueFilename)
+
 	// Save file
-	filepath := fmt.Sprintf("%s/%s", UploadDir, filename)
 	if err := c.SaveUploadedFile(file, filepath); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Error saving file: " + err.Error()})
 		return
 	}
 
+	log.Printf("✅ File uploaded successfully: %s (%.1fMB)", uniqueFilename, float64(file.Size)/(1024*1024))
+
 	c.JSON(http.StatusCreated, gin.H{
-		"image_url": fmt.Sprintf("/static/uploads/%s", filename),
+		"message":   "File uploaded successfully",
+		"image_url": fmt.Sprintf("/static/uploads/%s", uniqueFilename),
+		"filename":  uniqueFilename,
 		"file_size": fmt.Sprintf("%.1fMB", float64(file.Size)/(1024*1024)),
 	})
 }
