@@ -6,7 +6,7 @@ Backend API server yang dibuat dengan Go dan Gin framework untuk dashboard e-com
 
 ### Prerequisites
 - Go 1.21 atau lebih baru
-- MongoDB (lokal atau cloud)
+- MongoDB Atlas (Cloud) atau MongoDB Local
 
 ### Installation
 
@@ -21,7 +21,18 @@ Backend API server yang dibuat dengan Go dan Gin framework untuk dashboard e-com
    go mod tidy
    ```
 
-3. **Start MongoDB:**
+3. **Setup Database:**
+   
+   **Option A: MongoDB Atlas (Recommended - Works Anywhere)**
+   ```bash
+   # Run atlas setup guide
+   atlas-guide.bat
+   
+   # Then update connection string
+   setup-atlas.bat
+   ```
+   
+   **Option B: Local MongoDB**
    ```bash
    # Windows
    net start mongodb
