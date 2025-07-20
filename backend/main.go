@@ -141,7 +141,7 @@ func setupRoutes() *gin.Engine {
 
 	// CORS configuration
 	config := cors.DefaultConfig()
-	config.AllowOrigins = []string{"http://localhost:3000", "http://127.0.0.1:3000"}
+	config.AllowOrigins = []string{"http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:8000", "http://127.0.0.1:8000"}
 	config.AllowMethods = []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"}
 	config.AllowHeaders = []string{"Origin", "Content-Type", "Accept", "Authorization"}
 	r.Use(cors.New(config))
