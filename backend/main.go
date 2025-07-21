@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/gin-contrib/cors"
@@ -67,6 +66,7 @@ var (
 	port        string
 	uploadDir   string
 	maxFileSize int64
+	mongoMode   string // "atlas" atau "local"
 )
 
 func init() {
@@ -99,16 +99,26 @@ func getEnv(key, defaultValue string) string {
 	return defaultValue
 }
 
-func connectMongoDB() {
-	mongoURI := getEnv("MONGO_URI", "mongodb://localhost:27017/pitipaw")
+func connectMongoLocal() {
+	mongoURI := getEnv("MONGO_URI_LOCAL", "mongodb://localhost:27017/pitipaw")
+	fmt.Println("🏠 Using Local MongoDB")
+	connectMongo(mongoURI)
+}
 
-	// Log connection type
-	if strings.Contains(mongoURI, "mongodb+srv://") {
-		fmt.Println("🌐 Using MongoDB Atlas (Cloud Database)")
-	} else {
-		fmt.Println("🏠 Using Local MongoDB")
+func connectMongoAtlas() {
+	mongoURI := getEnv("MONGO_URI_ATLAS", "")
+	if mongoURI == "" {
+		// fallback ke MONGO_URI jika tidak ada
+		mongoURI = getEnv("MONGO_URI", "")
 	}
+	if mongoURI == "" {
+		log.Fatal("MONGO_URI_ATLAS atau MONGO_URI belum di-set untuk Atlas!")
+	}
+	fmt.Println("🌐 Using MongoDB Atlas (Cloud Database)")
+	connectMongo(mongoURI)
+}
 
+func connectMongo(mongoURI string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -131,6 +141,15 @@ func connectMongoDB() {
 	admins = db.Collection("admins")
 }
 
+func connectMongoDB() {
+	mongoMode = getEnv("MONGO_MODE", "local")
+	if mongoMode == "atlas" {
+		connectMongoAtlas()
+	} else {
+		connectMongoLocal()
+	}
+}
+
 func setupRoutes() *gin.Engine {
 	// Set Gin mode based on environment
 	if getEnv("ENVIRONMENT", "development") == "production" {
@@ -139,12 +158,20 @@ func setupRoutes() *gin.Engine {
 
 	r := gin.Default()
 
-	// CORS configuration
+	// CORS configuration (umum untuk semua route)
 	config := cors.DefaultConfig()
 	config.AllowOrigins = []string{"http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:8000", "http://127.0.0.1:8000"}
 	config.AllowMethods = []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"}
 	config.AllowHeaders = []string{"Origin", "Content-Type", "Accept", "Authorization"}
 	r.Use(cors.New(config))
+
+	// CORS khusus Atlas (jika ingin, misal untuk endpoint monitoring Atlas)
+	r.OPTIONS("/atlas/*any", func(c *gin.Context) {
+		c.Header("Access-Control-Allow-Origin", "*")
+		c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		c.Header("Access-Control-Allow-Headers", "Origin, Content-Type, Accept, Authorization")
+		c.Status(http.StatusOK)
+	})
 
 	// Serve static files
 	r.Static("/static", "./static")
