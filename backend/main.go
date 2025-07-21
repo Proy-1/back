@@ -2,11 +2,12 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strconv"
 	"time"
 
@@ -17,7 +18,33 @@ import (
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
+
+	"github.com/o1egl/paseto"
+	"golang.org/x/crypto/bcrypt"
 )
+
+// Health check handler
+func healthCheck(c *gin.Context) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Test database connection
+	err := client.Ping(ctx, nil)
+	status := "ok"
+	dbStatus := "connected"
+
+	if err != nil {
+		status = "error"
+		dbStatus = "disconnected"
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"status":    status,
+		"database":  dbStatus,
+		"timestamp": time.Now().Unix(),
+		"version":   "1.0.0",
+	})
+}
 
 // Models
 type Product struct {
@@ -30,6 +57,8 @@ type Product struct {
 	Stock       int                `json:"stock" bson:"stock"`
 	CreatedAt   time.Time          `json:"created_at" bson:"created_at"`
 	UpdatedAt   time.Time          `json:"updated_at" bson:"updated_at"`
+	ImageData   []byte             `bson:"image_data,omitempty" json:"image_data,omitempty"`
+	ImageBase64 string             `json:"image_base64,omitempty" bson:"-"` // Only for response, not stored in DB
 }
 
 type Admin struct {
@@ -59,14 +88,15 @@ type Stats struct {
 
 // Global variables
 var (
-	client      *mongo.Client
-	db          *mongo.Database
-	products    *mongo.Collection
-	admins      *mongo.Collection
-	port        string
-	uploadDir   string
-	maxFileSize int64
-	mongoMode   string // "atlas" atau "local"
+	client          *mongo.Client
+	db              *mongo.Database
+	products        *mongo.Collection
+	admins          *mongo.Collection
+	port            string
+	uploadDir       string
+	maxFileSize     int64
+	mongoMode       string                                        // "atlas" atau "local"
+	pasetoSecretKey = []byte("pitipaw-supersecret-key-32bytes!!") // 32 bytes for v2 local
 )
 
 func init() {
@@ -162,7 +192,7 @@ func setupRoutes() *gin.Engine {
 	config := cors.DefaultConfig()
 	config.AllowOrigins = []string{"http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:8000", "http://127.0.0.1:8000"}
 	config.AllowMethods = []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"}
-	config.AllowHeaders = []string{"Origin", "Content-Type", "Accept", "Authorization"}
+	config.AllowHeaders = []string{"Origin", "Content-Type", "Accept", "Authorization", "cache-control"}
 	r.Use(cors.New(config))
 
 	// CORS khusus Atlas (jika ingin, misal untuk endpoint monitoring Atlas)
@@ -200,35 +230,13 @@ func setupRoutes() *gin.Engine {
 
 		// File upload
 		api.POST("/upload", uploadFile)
+		// Endpoint untuk mengambil gambar dari database
+		api.GET("/image/:id", getImageFromDB)
 
 		// Statistics
 		api.GET("/stats", getStats)
 	}
-
 	return r
-}
-
-// Handlers
-func healthCheck(c *gin.Context) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	// Test database connection
-	err := client.Ping(ctx, nil)
-	status := "ok"
-	dbStatus := "connected"
-
-	if err != nil {
-		status = "error"
-		dbStatus = "disconnected"
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"status":    status,
-		"database":  dbStatus,
-		"timestamp": time.Now().Unix(),
-		"version":   "1.0.0",
-	})
 }
 
 func getProducts(c *gin.Context) {
@@ -248,7 +256,21 @@ func getProducts(c *gin.Context) {
 		return
 	}
 
+	// Convert image data to base64 for each product (for frontend display)
+	for i := range productList {
+		if len(productList[i].ImageData) > 0 {
+			productList[i].ImageBase64 = "data:image/jpeg;base64," + encodeToBase64(productList[i].ImageData)
+		}
+		// Optionally, you can clear the ImageData from response to reduce payload
+		productList[i].ImageData = nil
+	}
+
 	c.JSON(http.StatusOK, gin.H{"products": productList})
+}
+
+// Helper to encode []byte to base64 string
+func encodeToBase64(data []byte) string {
+	return base64.StdEncoding.EncodeToString(data)
 }
 
 func createProduct(c *gin.Context) {
@@ -442,7 +464,7 @@ func login(c *gin.Context) {
 	}
 
 	var admin Admin
-	err := admins.FindOne(ctx, bson.M{"username": req.Username, "password": req.Password}).Decode(&admin)
+	err := admins.FindOne(ctx, bson.M{"username": req.Username}).Decode(&admin)
 	if err != nil {
 		if err == mongo.ErrNoDocuments {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid credentials"})
@@ -452,11 +474,32 @@ func login(c *gin.Context) {
 		return
 	}
 
+	// Compare password with bcrypt
+	if bcrypt.CompareHashAndPassword([]byte(admin.Password), []byte(req.Password)) != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid credentials"})
+		return
+	}
+
+	// Generate Paseto token
+	now := time.Now()
+	exp := now.Add(24 * time.Hour)
+	jsonToken := paseto.JSONToken{
+		Subject:    admin.ID.Hex(),
+		IssuedAt:   now,
+		Expiration: exp,
+	}
+	footer := "pitipaw-admin"
+	token, err := paseto.NewV2().Encrypt(pasetoSecretKey, jsonToken, footer)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate token"})
+		return
+	}
+
 	admin.Password = "" // Don't return password
 	c.JSON(http.StatusOK, gin.H{
 		"message": "Login successful",
 		"admin":   admin,
-		"token":   "dummy_token", // In production, use JWT
+		"token":   token,
 	})
 }
 
@@ -478,10 +521,17 @@ func register(c *gin.Context) {
 		return
 	}
 
+	// Hash password with bcrypt
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to hash password"})
+		return
+	}
+
 	admin := Admin{
 		Username:  req.Username,
 		Email:     req.Email,
-		Password:  req.Password, // In production, hash the password
+		Password:  string(hashedPassword),
 		CreatedAt: time.Now(),
 	}
 
@@ -512,23 +562,63 @@ func uploadFile(c *gin.Context) {
 		return
 	}
 
-	// Generate unique filename
-	filename := fmt.Sprintf("%d_%s", time.Now().Unix(), file.Filename)
-	filepath := filepath.Join(uploadDir, filename)
-
-	// Save file
-	if err := c.SaveUploadedFile(file, filepath); err != nil {
+	// Baca file sebagai []byte
+	src, err := file.Open()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	defer src.Close()
+	fileBytes, err := io.ReadAll(src)
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	// Return file URL
-	fileURL := fmt.Sprintf("/static/uploads/%s", filename)
+	// Simpan ke database sebagai dokumen baru di koleksi products (atau bisa juga update produk tertentu)
+	product := Product{
+		Name:      file.Filename,
+		Image:     file.Filename,
+		ImageData: fileBytes,
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	result, err := products.InsertOne(context.Background(), product)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
 	c.JSON(http.StatusOK, gin.H{
-		"message":  "File uploaded successfully",
-		"filename": filename,
-		"url":      fileURL,
+		"message":  "File uploaded and saved to database successfully",
+		"id":       result.InsertedID,
+		"filename": file.Filename,
 	})
+}
+
+// Handler untuk mengambil gambar dari database dan menampilkannya langsung
+func getImageFromDB(c *gin.Context) {
+	id := c.Param("id")
+	objectID, err := primitive.ObjectIDFromHex(id)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid image ID"})
+		return
+	}
+
+	var product Product
+	err = products.FindOne(context.Background(), bson.M{"_id": objectID}).Decode(&product)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Image not found"})
+		return
+	}
+	if len(product.ImageData) == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "No image data found"})
+		return
+	}
+
+	// Set Content-Type (bisa dideteksi dari nama file, di sini default ke image/jpeg)
+	c.Header("Content-Type", "image/jpeg")
+	c.Writer.Write(product.ImageData)
 }
 
 func getStats(c *gin.Context) {
