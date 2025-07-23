@@ -299,8 +299,26 @@ func createProduct(c *gin.Context) {
 		return
 	}
 
+	// Jika ada image_base64, decode ke binary dan simpan ke ImageData
+	if product.ImageBase64 != "" {
+		// Hilangkan prefix jika ada (misal: data:image/jpeg;base64,)
+		base64Data := product.ImageBase64
+		if idx := len("data:image/jpeg;base64,"); len(base64Data) > idx && base64Data[:idx] == "data:image/jpeg;base64," {
+			base64Data = base64Data[idx:]
+		}
+		imgBytes, err := base64.StdEncoding.DecodeString(base64Data)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid image_base64 format"})
+			return
+		}
+		product.ImageData = imgBytes
+	}
+
 	product.CreatedAt = time.Now()
 	product.UpdatedAt = time.Now()
+
+	// Jangan simpan image_base64 di database
+	product.ImageBase64 = ""
 
 	result, err := products.InsertOne(ctx, product)
 	if err != nil {
