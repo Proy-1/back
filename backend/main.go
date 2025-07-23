@@ -54,6 +54,7 @@ type Product struct {
 	Description string             `json:"description" bson:"description"`
 	Category    string             `json:"category" bson:"category"`
 	Image       string             `json:"image" bson:"image"`
+	ImageURL    string             `json:"image_url,omitempty" bson:"image_url,omitempty"`
 	Stock       int                `json:"stock" bson:"stock"`
 	CreatedAt   time.Time          `json:"created_at" bson:"created_at"`
 	UpdatedAt   time.Time          `json:"updated_at" bson:"updated_at"`
@@ -95,8 +96,8 @@ var (
 	port            string
 	uploadDir       string
 	maxFileSize     int64
-	mongoMode       string                                        // "atlas" atau "local"
-	pasetoSecretKey = []byte("pitipaw-supersecret-key-32bytes!!") // 32 bytes for v2 local
+	mongoMode       string // "atlas" atau "local"
+	pasetoSecretKey []byte // di-set di init()
 )
 
 func init() {
@@ -120,6 +121,13 @@ func init() {
 	if err := os.MkdirAll(uploadDir, 0755); err != nil {
 		log.Printf("Error creating upload directory: %v", err)
 	}
+
+	// Set Paseto secret key from environment variable
+	key := getEnv("PASETO_SECRET_KEY", "")
+	if len(key) != 32 {
+		log.Fatal("PASETO_SECRET_KEY harus 32 karakter! Contoh: '12345678901234567890123456789012'")
+	}
+	pasetoSecretKey = []byte(key)
 }
 
 func getEnv(key, defaultValue string) string {
@@ -245,6 +253,7 @@ func getProducts(c *gin.Context) {
 
 	cursor, err := products.Find(ctx, bson.M{})
 	if err != nil {
+		log.Println("Error products.Find:", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -252,6 +261,7 @@ func getProducts(c *gin.Context) {
 
 	var productList []Product
 	if err = cursor.All(ctx, &productList); err != nil {
+		log.Println("Error cursor.All:", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -261,10 +271,16 @@ func getProducts(c *gin.Context) {
 		if len(productList[i].ImageData) > 0 {
 			productList[i].ImageBase64 = "data:image/jpeg;base64," + encodeToBase64(productList[i].ImageData)
 		}
-		// Optionally, you can clear the ImageData from response to reduce payload
+		// Set image_url from database if available
+		// If productList[i].ImageURL is empty, try to fill from Image field (for backward compatibility)
+		if productList[i].ImageURL == "" && productList[i].Image != "" {
+			// If Image is a path, use it as image_url
+			productList[i].ImageURL = productList[i].Image
+		}
 		productList[i].ImageData = nil
 	}
 
+	log.Println("getProducts response count:", len(productList))
 	c.JSON(http.StatusOK, gin.H{"products": productList})
 }
 
@@ -459,6 +475,7 @@ func login(c *gin.Context) {
 
 	var req LoginRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
+		log.Println("BindJSON error:", err)
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -470,12 +487,14 @@ func login(c *gin.Context) {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid credentials"})
 			return
 		}
+		log.Println("FindOne error:", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
 	// Compare password with bcrypt
 	if bcrypt.CompareHashAndPassword([]byte(admin.Password), []byte(req.Password)) != nil {
+		log.Println("Password mismatch for user:", req.Username)
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid credentials"})
 		return
 	}
@@ -491,6 +510,7 @@ func login(c *gin.Context) {
 	footer := "pitipaw-admin"
 	token, err := paseto.NewV2().Encrypt(pasetoSecretKey, jsonToken, footer)
 	if err != nil {
+		log.Println("Paseto token generation error:", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate token"})
 		return
 	}
