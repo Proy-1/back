@@ -9,7 +9,11 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"time"
+
+	"github.com/cloudinary/cloudinary-go/v2"
+	"github.com/cloudinary/cloudinary-go/v2/api/uploader"
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
@@ -98,6 +102,8 @@ var (
 	maxFileSize     int64
 	mongoMode       string // "atlas" atau "local"
 	pasetoSecretKey []byte // di-set di init()
+	cloudinaryURL   string
+	cld             *cloudinary.Cloudinary
 )
 
 func init() {
@@ -128,6 +134,18 @@ func init() {
 		log.Fatal("PASETO_SECRET_KEY harus 32 karakter! Contoh: '12345678901234567890123456789012'")
 	}
 	pasetoSecretKey = []byte(key)
+
+	// Set Cloudinary URL from environment variable
+	cloudinaryURL = getEnv("CLOUDINARY_URL", "")
+	if cloudinaryURL == "" {
+		log.Println("CLOUDINARY_URL belum di-set di .env, upload gambar ke Cloudinary tidak aktif")
+	} else {
+		var err error
+		cld, err = cloudinary.NewFromURL(cloudinaryURL)
+		if err != nil {
+			log.Fatalf("Gagal inisialisasi Cloudinary: %v", err)
+		}
+	}
 }
 
 func getEnv(key, defaultValue string) string {
@@ -150,9 +168,20 @@ func connectMongoAtlas() {
 		mongoURI = getEnv("MONGO_URI", "")
 	}
 	if mongoURI == "" {
-		log.Fatal("MONGO_URI_ATLAS atau MONGO_URI belum di-set untuk Atlas!")
+		log.Fatal("MONGO_URI_ATLAS belum di-set untuk Atlas!")
 	}
+
+	// Pastikan database name 'pitipaw' ada di connection string
+	if !strings.Contains(mongoURI, "/pitipaw") && !strings.Contains(mongoURI, "mongodb.net/?") {
+		// Jika connection string tidak memiliki database name, tambahkan
+		mongoURI = strings.Replace(mongoURI, "mongodb.net/", "mongodb.net/pitipaw", 1)
+	} else if strings.Contains(mongoURI, "mongodb.net/?") {
+		// Jika ada /? di akhir, ganti dengan /pitipaw?
+		mongoURI = strings.Replace(mongoURI, "mongodb.net/?", "mongodb.net/pitipaw?", 1)
+	}
+
 	fmt.Println("🌐 Using MongoDB Atlas (Cloud Database)")
+	fmt.Printf("📡 Connecting to: %s\n", mongoURI)
 	connectMongo(mongoURI)
 }
 
@@ -299,19 +328,25 @@ func createProduct(c *gin.Context) {
 		return
 	}
 
-	// Jika ada image_base64, decode ke binary dan simpan ke ImageData
-	if product.ImageBase64 != "" {
-		// Hilangkan prefix jika ada (misal: data:image/jpeg;base64,)
+	// Jika ada image_base64 dan Cloudinary aktif, upload ke Cloudinary
+	if product.ImageBase64 != "" && cld != nil {
 		base64Data := product.ImageBase64
+		// Hilangkan prefix jika ada (misal: data:image/jpeg;base64,)
 		if idx := len("data:image/jpeg;base64,"); len(base64Data) > idx && base64Data[:idx] == "data:image/jpeg;base64," {
 			base64Data = base64Data[idx:]
 		}
-		imgBytes, err := base64.StdEncoding.DecodeString(base64Data)
+		// Upload ke Cloudinary
+		uploadParams := uploader.UploadParams{
+			Folder: "pitipaw/products",
+		}
+		uploadResult, err := cld.Upload.Upload(context.Background(), "data:image/jpeg;base64,"+base64Data, uploadParams)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid image_base64 format"})
+			log.Println("Cloudinary upload error:", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Gagal upload gambar ke Cloudinary"})
 			return
 		}
-		product.ImageData = imgBytes
+		product.ImageURL = uploadResult.SecureURL
+		product.Image = uploadResult.PublicID
 	}
 
 	product.CreatedAt = time.Now()
@@ -319,6 +354,7 @@ func createProduct(c *gin.Context) {
 
 	// Jangan simpan image_base64 di database
 	product.ImageBase64 = ""
+	product.ImageData = nil // Tidak simpan binary di database
 
 	result, err := products.InsertOne(ctx, product)
 	if err != nil {
