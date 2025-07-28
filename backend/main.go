@@ -408,7 +408,32 @@ func updateProduct(c *gin.Context) {
 		return
 	}
 
+	// Jika ada image_base64 dan Cloudinary aktif, upload ke Cloudinary
+	if updateData.ImageBase64 != "" && cld != nil {
+		base64Data := updateData.ImageBase64
+		// Hilangkan prefix jika ada (misal: data:image/jpeg;base64,)
+		if idx := len("data:image/jpeg;base64,"); len(base64Data) > idx && base64Data[:idx] == "data:image/jpeg;base64," {
+			base64Data = base64Data[idx:]
+		}
+		// Upload ke Cloudinary
+		uploadParams := uploader.UploadParams{
+			Folder: "pitipaw/products",
+		}
+		uploadResult, err := cld.Upload.Upload(context.Background(), "data:image/jpeg;base64,"+base64Data, uploadParams)
+		if err != nil {
+			log.Println("Cloudinary upload error:", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Gagal upload gambar ke Cloudinary"})
+			return
+		}
+		updateData.ImageURL = uploadResult.SecureURL
+		updateData.Image = uploadResult.PublicID
+	}
+
 	updateData.UpdatedAt = time.Now()
+	// Jangan simpan image_base64 di database
+	updateData.ImageBase64 = ""
+	updateData.ImageData = nil
+
 	update := bson.M{"$set": updateData}
 
 	result, err := products.UpdateOne(ctx, bson.M{"_id": objectID}, update)
