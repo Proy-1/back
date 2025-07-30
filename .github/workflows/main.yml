@@ -25,8 +25,8 @@ jobs:
     
     - name: Build and chmod
       run: |
-        go build -o gocroot
-        chmod a+x gocroot
+        go build -o pitipaw
+        chmod a+x pitipaw
     
     - name: Copy binary file via ssh password
       uses: appleboy/scp-action@v0.1.7
