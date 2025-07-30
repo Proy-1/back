@@ -1,0 +1,51 @@
+name: AlwaysData.com Deployment
+on:
+  push:
+    branches:
+      - main
+jobs:
+  web-deploy:
+    name: 🎉 Deploy
+    runs-on: ubuntu-latest
+    steps:
+    - name: 🚚 Get latest code
+      uses: actions/checkout@v4
+
+    - name: Setup Go 1.22.x
+      uses: actions/setup-go@v5
+      with:
+        # Semantic version range syntax or exact version of Go
+        go-version: '1.22.x'
+
+    - name: Set Env for build CGO_ENABLED=0
+      run: go env -w CGO_ENABLED=0
+  
+    - name: Install dependencies
+      run: go get .
+    
+    - name: Build and chmod
+      run: |
+        go build -o gocroot
+        chmod a+x gocroot
+    
+    - name: Copy binary file via ssh password
+      uses: appleboy/scp-action@v0.1.7
+      with:
+        host: ${{ secrets.sshhost }}
+        username: ${{ secrets.sshusername }}
+        password: ${{ secrets.sshpassword }}
+        port: ${{ secrets.sshport }}
+        source: "pitipaw"
+        target: ${{ secrets.folder }}
+
+    - name: Check binary file, ipaddress, and restart sites
+      uses: appleboy/ssh-action@v1.0.3
+      with:
+        host: ${{ secrets.sshhost }}
+        username: ${{ secrets.sshusername }}
+        password: ${{ secrets.sshpassword }}
+        port: ${{ secrets.sshport }}
+        script: |
+          ls -l gocroot
+          curl https://icanhazip.com/
+          curl -X POST --basic --user "${{ secrets.apikey }}:" https://api.alwaysdata.com/v1/site/${{ secrets.appid }}/restart/
