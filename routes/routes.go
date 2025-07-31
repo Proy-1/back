@@ -16,7 +16,7 @@ func Setup(ctrl *controllers.Controller, env string) *gin.Engine {
 	r := gin.Default()
 
 	config := cors.DefaultConfig()
-	config.AllowOrigins = []string{"http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:8000"}
+	config.AllowOrigins = []string{"http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:8000", "https://proy-1.github.io"}
 	config.AllowMethods = []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"}
 	config.AllowHeaders = []string{"Origin", "Content-Type", "Accept", "Authorization"}
 	r.Use(cors.New(config))
@@ -30,7 +30,7 @@ func Setup(ctrl *controllers.Controller, env string) *gin.Engine {
 		// Rute otentikasi
 		api.POST("/login", ctrl.Login)
 		api.POST("/register", ctrl.Register)
-		
+
 		// Rute produk
 		api.GET("/products", ctrl.GetProducts)
 		api.POST("/products", ctrl.CreateProduct)
