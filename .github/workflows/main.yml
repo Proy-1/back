@@ -46,7 +46,7 @@ jobs:
         password: ${{ secrets.sshpassword }}
         port: ${{ secrets.sshport }}
         script: |
-          ls -l gocroot
+          ls -l ${{ secrets.folder }}/pitipaw
           curl https://icanhazip.com/
           curl -X POST --basic --user "${{ secrets.apikey }}:" https://api.alwaysdata.com/v1/site/${{ secrets.appid }}/restart/
     - name: List files
