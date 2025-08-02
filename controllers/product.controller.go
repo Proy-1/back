@@ -122,7 +122,24 @@ func (ctrl *Controller) UpdateProduct(c *gin.Context) {
 		return
 	}
 
+	// Jika ada gambar baru (imageBase64), upload ke Cloudinary
+	if updateData.ImageBase64 != "" && ctrl.Cld != nil {
+		uploadResult, err := ctrl.Cld.Upload.Upload(
+			context.Background(),
+			updateData.ImageBase64,
+			uploader.UploadParams{Folder: "pitipaw/products"},
+		)
+		if err != nil {
+			log.Println("Cloudinary upload error:", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to upload image"})
+			return
+		}
+		updateData.ImageURL = uploadResult.SecureURL
+		updateData.Image = uploadResult.PublicID
+	}
+
 	updateData.UpdatedAt = time.Now()
+	updateData.ImageBase64 = ""
 	update := bson.M{"$set": updateData}
 
 	collection := ctrl.DB.Collection("products")
